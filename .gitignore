@@ -1,0 +1,8 @@
+.env
+.envrc
+.venv/
+__pycache__/
+output_*.md
+.copilot/
+*.egg-info/
+dist/
