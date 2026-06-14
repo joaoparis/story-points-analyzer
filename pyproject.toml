@@ -1,0 +1,18 @@
+[project]
+name = "story-points-analyzer"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+story-points-analyzer = "story_points_analyzer.main:main"
+
+[project.urls]
+Repository = "https://github.com/YOUR_USERNAME/story-points-analyzer"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
