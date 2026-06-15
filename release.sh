@@ -95,7 +95,7 @@ echo "SHA256: $SHA256"
 echo "Updating formula..."
 
 sed -i '' "s|url \"https://github.com/$TOOL_REPO/archive/refs/tags/v.*\.tar\.gz\"|url \"$TARBALL_URL\"|" "$FORMULA"
-sed -i '' "/url \"$TARBALL_URL\"/{n;s/sha256 \".*\"/sha256 \"$SHA256\"/;}" "$FORMULA"
+sed -i '' "\|url \"$TARBALL_URL\"|{n;s/sha256 \".*\"/sha256 \"$SHA256\"/;}" "$FORMULA"
 sed -i '' "s/assert_match \"story-points-analyzer .*/assert_match \"story-points-analyzer $VERSION\", shell_output(\"#{bin}\/story-points-analyzer --version\")/" "$FORMULA"
 
 # Bump the formula version comment if present (optional, best-effort)
