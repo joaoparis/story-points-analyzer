@@ -11,7 +11,7 @@ within each SP bucket) rather than a rigid "1 SP = N days" rule.
 ### Option A — Homebrew (recommended)
 
 ```bash
-brew tap YOUR_USERNAME/buddy-tools
+brew tap joaoparis/scrum-tools
 brew install story-points-analyzer
 ```
 
