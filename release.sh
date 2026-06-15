@@ -47,7 +47,7 @@ fi
 # Bump version in source files
 # ---------------------------------------------------------------------------
 
-echo "Bumping version to $VERSION…"
+echo "Bumping version to ${VERSION}..."
 
 # pyproject.toml
 sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
