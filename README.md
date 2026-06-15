@@ -22,7 +22,7 @@ pip install .
 
 ```bash
 brew tap joaoparis/scrum-tools
-brew install story-points-analyzer
+brew install joaoparis/scrum-tools/story-points-analyzer
 ```
 
 ---
