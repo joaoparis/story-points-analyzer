@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -20,13 +21,15 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Fetches completed Jira stories and tasks, computes cycle times per\n"
             "story-point bucket (mean / median / P75 / P95 / outliers), and\n"
-            "publishes a statistical accuracy report to a Confluence page."
+            "writes a Markdown report locally or publishes it to Confluence."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Environment variables (required):\n"
+            "Environment variables (always required):\n"
             "  JIRA_BASE_URL              e.g. https://your-org.example.net/jira\n"
             "  JIRA_TOKEN                 Jira personal access token\n"
+            "\n"
+            "Environment variables (required only with --publish):\n"
             "  CONFLUENCE_BASE_URL        e.g. https://your-org.example.net/confluence\n"
             "  CONFLUENCE_TOKEN           Confluence personal access token\n"
             "  CONFLUENCE_PARENT_PAGE_ID  Confluence parent page ID\n"
@@ -39,11 +42,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "Run `story-points-analyzer setup` to create one interactively.\n"
             "\n"
             "Examples:\n"
-            "  story-points-analyzer                      publish last 6 months\n"
-            "  story-points-analyzer --months 3           last 3 months\n"
-            "  story-points-analyzer --dry-run            preview report, no publish\n"
-            '  story-points-analyzer --title "Sprint 42"  upsert a named page\n'
-            "  story-points-analyzer setup                guided env-var setup\n"
+            "  story-points-analyzer                            write report.md locally\n"
+            "  story-points-analyzer --months 3                 last 3 months\n"
+            "  story-points-analyzer --output sprint27.md       custom output file\n"
+            "  story-points-analyzer --publish                  publish to Confluence\n"
+            '  story-points-analyzer --publish --title "Sprint 42"  upsert a named page\n'
+            "  story-points-analyzer setup                      guided env-var setup\n"
         ),
     )
     parser.add_argument(
@@ -66,9 +70,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of months of history to analyse (default: 6)",
     )
     parser.add_argument(
-        "--dry-run",
+        "--publish",
         action="store_true",
-        help="Print the Confluence markup to stdout instead of publishing",
+        help="Publish to Confluence instead of writing a local Markdown file",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="report.md",
+        metavar="FILE",
+        help="Output file path for the local Markdown report (default: report.md)",
     )
     parser.add_argument(
         "--verbose",
@@ -81,7 +92,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="TITLE",
         help=(
-            "Confluence page title. If the page already exists it will be replaced; "
+            "Confluence page title (only used with --publish). "
+            "If the page already exists it will be replaced; "
             "if it does not exist it will be created. "
             "Omit to always create a new page with an auto-generated title."
         ),
@@ -115,7 +127,12 @@ def main() -> None:
         print("No issues found. Nothing to report.")
         return
 
-    report_module.publish(issues, months=args.months, dry_run=args.dry_run, title=args.title)
+    if args.publish:
+        report_module.publish_to_confluence(issues, months=args.months, title=args.title)
+    else:
+        output = Path(args.output)
+        report_module.save_markdown(issues, months=args.months, output_path=str(output))
+        print(f"Report written to {output.resolve()}")
 
 
 if __name__ == "__main__":

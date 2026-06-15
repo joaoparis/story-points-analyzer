@@ -17,18 +17,9 @@ import requests
 
 from story_points_analyzer.jira import Issue
 
-CONFLUENCE_BASE_URL = os.environ["CONFLUENCE_BASE_URL"]
-CONFLUENCE_TOKEN = os.environ["CONFLUENCE_TOKEN"]
-CONFLUENCE_PARENT_PAGE_ID = os.environ["CONFLUENCE_PARENT_PAGE_ID"]
-
 _DEFAULT_TITLE_PREFIX = "BuddyBuilders — Story Point Accuracy Report"
 _SPACE_KEY = "PROJ"
 _MIN_BUCKET_SIZE = 1
-
-_HEADERS = {
-    "Authorization": f"Bearer {CONFLUENCE_TOKEN}",
-    "Content-Type": "application/json",
-}
 
 
 @dataclass
@@ -44,22 +35,35 @@ class BucketStats:
     outliers: list[Issue]
 
 
-def publish(issues: list[Issue], months: int, dry_run: bool = False, title: str | None = None) -> None:
-    """Build the report and publish (or print) the Confluence page.
+def save_markdown(issues: list[Issue], months: int, output_path: str) -> None:
+    """Build the report and write it as a Markdown file."""
+    buckets = _compute_buckets(issues)
+    content = _build_markdown(buckets, issues, months)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def publish_to_confluence(issues: list[Issue], months: int, title: str | None = None) -> None:
+    """Build the report and publish to Confluence.
 
     title behaviour:
     - Provided + page exists  → replace that page
     - Provided + no page yet  → create with that title
     - Not provided            → always create a new page with an auto-generated title
     """
+    _check_confluence_env()
     buckets = _compute_buckets(issues)
-
-    if dry_run:
-        print(_build_markdown(buckets, issues, months))
-        return
-
     page_title = title or _auto_title()
     _upsert_confluence_page(_build_wiki(buckets, issues, months), page_title, upsert=title is not None)
+
+
+def _check_confluence_env() -> None:
+    missing = [v for v in ("CONFLUENCE_BASE_URL", "CONFLUENCE_TOKEN", "CONFLUENCE_PARENT_PAGE_ID") if not os.environ.get(v)]
+    if missing:
+        raise SystemExit(
+            f"Missing required env vars for --publish: {', '.join(missing)}\n"
+            "Add them to your .env file or run: story-points-analyzer setup"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +305,13 @@ def _auto_title() -> str:
 # Confluence page upsert
 # ---------------------------------------------------------------------------
 
+def _confluence_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {os.environ['CONFLUENCE_TOKEN']}",
+        "Content-Type": "application/json",
+    }
+
+
 def _upsert_confluence_page(markup: str, title: str, upsert: bool) -> None:
     existing = _find_existing_page(title) if upsert else None
     if existing:
@@ -313,13 +324,9 @@ def _upsert_confluence_page(markup: str, title: str, upsert: bool) -> None:
 
 def _find_existing_page(title: str) -> dict | None:
     resp = requests.get(
-        f"{CONFLUENCE_BASE_URL}/rest/api/content",
-        headers=_HEADERS,
-        params={
-            "title": title,
-            "spaceKey": _SPACE_KEY,
-            "expand": "version",
-        },
+        f"{os.environ['CONFLUENCE_BASE_URL']}/rest/api/content",
+        headers=_confluence_headers(),
+        params={"title": title, "spaceKey": _SPACE_KEY, "expand": "version"},
         timeout=15,
     )
     resp.raise_for_status()
@@ -332,14 +339,12 @@ def _create_page(markup: str, title: str) -> str:
         "type": "page",
         "title": title,
         "space": {"key": _SPACE_KEY},
-        "ancestors": [{"id": CONFLUENCE_PARENT_PAGE_ID}],
-        "body": {
-            "wiki": {"value": markup, "representation": "wiki"}
-        },
+        "ancestors": [{"id": os.environ["CONFLUENCE_PARENT_PAGE_ID"]}],
+        "body": {"wiki": {"value": markup, "representation": "wiki"}},
     }
     resp = requests.post(
-        f"{CONFLUENCE_BASE_URL}/rest/api/content",
-        headers=_HEADERS,
+        f"{os.environ['CONFLUENCE_BASE_URL']}/rest/api/content",
+        headers=_confluence_headers(),
         json=payload,
         timeout=15,
     )
@@ -352,13 +357,11 @@ def _update_page(page_id: str, new_version: int, markup: str, title: str) -> Non
         "type": "page",
         "title": title,
         "version": {"number": new_version},
-        "body": {
-            "wiki": {"value": markup, "representation": "wiki"}
-        },
+        "body": {"wiki": {"value": markup, "representation": "wiki"}},
     }
     resp = requests.put(
-        f"{CONFLUENCE_BASE_URL}/rest/api/content/{page_id}",
-        headers=_HEADERS,
+        f"{os.environ['CONFLUENCE_BASE_URL']}/rest/api/content/{page_id}",
+        headers=_confluence_headers(),
         json=payload,
         timeout=15,
     )
@@ -366,4 +369,4 @@ def _update_page(page_id: str, new_version: int, markup: str, title: str) -> Non
 
 
 def _page_url(page_id: str) -> str:
-    return f"{CONFLUENCE_BASE_URL}/pages/viewpage.action?pageId={page_id}"
+    return f"{os.environ['CONFLUENCE_BASE_URL']}/pages/viewpage.action?pageId={page_id}"
