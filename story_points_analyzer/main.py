@@ -26,28 +26,32 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Environment variables (always required):\n"
-            "  JIRA_BASE_URL              e.g. https://atc.bmwgroup.net/jira\n"
+            "  JIRA_BASE_URL              e.g. https://your-org.atlassian.net\n"
             "  JIRA_TOKEN                 Jira personal access token\n"
             "\n"
             "Environment variables (required only with --publish):\n"
-            "  CONFLUENCE_BASE_URL        e.g. https://atc.bmwgroup.net/confluence\n"
+            "  CONFLUENCE_BASE_URL        e.g. https://your-org.atlassian.net/wiki\n"
             "  CONFLUENCE_TOKEN           Confluence personal access token\n"
-            "  CONFLUENCE_PARENT_PAGE_ID  Confluence parent page ID\n"
+            "  CONFLUENCE_PARENT_PAGE_ID  Numeric ID of the parent Confluence page\n"
             "\n"
             "Environment variables (optional):\n"
-            "  JIRA_PROJECT               Limit to a single project key (e.g. NWAP)\n"
-            '  JIRA_FEATURE_TEAM          Limit to a feature team (e.g. "Buddy Builders")\n'
+            "  JIRA_PROJECT               Limit to one project key, e.g. MYPROJ\n"
+            "                             Strongly recommended — without it the query\n"
+            "                             spans the entire Jira instance and may time out.\n"
+            '  JIRA_FEATURE_TEAM          Limit to a feature team, e.g. "My Team"\n'
             "\n"
             "Variables are loaded from a .env file in the current directory if present.\n"
             "Run `story-points-analyzer setup` to create one interactively.\n"
             "\n"
             "Examples:\n"
-            "  story-points-analyzer                            write report.md locally\n"
-            "  story-points-analyzer --months 3                 last 3 months\n"
-            "  story-points-analyzer --output sprint27.md       custom output file\n"
-            "  story-points-analyzer --publish                  publish to Confluence\n"
-            '  story-points-analyzer --publish --title "Sprint 42"  upsert a named page\n'
-            "  story-points-analyzer setup                      guided env-var setup\n"
+            "  story-points-analyzer                              write report.md (default)\n"
+            "  story-points-analyzer --months 3                   last 3 months\n"
+            "  story-points-analyzer --output q2.md               custom output file\n"
+            "  story-points-analyzer --months 3 --verbose         verbose progress output\n"
+            "  story-points-analyzer --publish                    publish to Confluence\n"
+            "  story-points-analyzer --publish --months 3         publish last 3 months\n"
+            '  story-points-analyzer --publish --title "Q2 2026"  upsert a named page\n'
+            "  story-points-analyzer setup                        guided env-var setup\n"
         ),
     )
     parser.add_argument(
@@ -72,19 +76,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--publish",
         action="store_true",
-        help="Publish to Confluence instead of writing a local Markdown file",
+        help=(
+            "Publish the report to Confluence instead of writing a local file. "
+            "Requires CONFLUENCE_BASE_URL, CONFLUENCE_TOKEN, and "
+            "CONFLUENCE_PARENT_PAGE_ID to be set."
+        ),
     )
     parser.add_argument(
         "--output",
         type=str,
         default="report.md",
         metavar="FILE",
-        help="Output file path for the local Markdown report (default: report.md)",
+        help="Local Markdown output path (default: report.md). Ignored when --publish is set.",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print progress for each issue as it is fetched",
+        help="Print each issue key as it is fetched, plus per-bucket elapsed time.",
     )
     parser.add_argument(
         "--title",
@@ -92,10 +100,10 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="TITLE",
         help=(
-            "Confluence page title (only used with --publish). "
-            "If the page already exists it will be replaced; "
-            "if it does not exist it will be created. "
-            "Omit to always create a new page with an auto-generated title."
+            "Confluence page title — only used with --publish. "
+            "If the page already exists it is replaced in-place; "
+            "if not, it is created. "
+            "Omit to always create a new page with an auto-generated timestamp title."
         ),
     )
     return parser
