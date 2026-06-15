@@ -12,7 +12,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+_CONFIG_ENV = Path.home() / ".config" / "story-points-analyzer" / ".env"
+load_dotenv(_CONFIG_ENV)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -40,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "                             spans the entire Jira instance and may time out.\n"
             '  JIRA_FEATURE_TEAM          Limit to a feature team, e.g. "My Team"\n'
             "\n"
-            "Variables are loaded from a .env file in the current directory if present.\n"
+            "Variables are loaded from ~/.config/story-points-analyzer/.env\n"
             "Run `story-points-analyzer setup` to create one interactively.\n"
             "\n"
             "Examples:\n"

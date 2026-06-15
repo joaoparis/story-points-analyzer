@@ -9,7 +9,7 @@ from __future__ import annotations
 import getpass
 from pathlib import Path
 
-_ENV_FILE = Path(".env")
+_ENV_FILE = Path.home() / ".config" / "story-points-analyzer" / ".env"
 
 _SECRET_VARS = {"JIRA_TOKEN", "CONFLUENCE_TOKEN"}
 
@@ -61,6 +61,7 @@ def _write_env(values: dict[str, str]) -> None:
         val = values.get(key, "")
         lines.append(f"{key}={val}" if val else f"# {key}=")
 
+    _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     _ENV_FILE.write_text("\n".join(lines) + "\n")
 
 
