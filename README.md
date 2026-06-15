@@ -1,27 +1,28 @@
-# BuddyBuilders — Story Point Accuracy Report
+# Story Point Accuracy Analyzer
 
-Detects stories and tasks that took disproportionately long relative to their
-story point estimate. Uses statistical outlier detection (cycle time > mean + 1σ
-within each SP bucket) rather than a rigid "1 SP = N days" rule.
+Fetches completed Jira stories and tasks for your team, then computes cycle
+time statistics per story-point bucket — mean, median, P75, P95 and outliers.
+Uses statistical outlier detection (cycle time > mean + 1σ within each SP
+bucket) rather than a rigid "1 SP = N days" rule.
 
 ---
 
 ## Installation
 
-### Option A — Homebrew (recommended)
-
-```bash
-brew tap joaoparis/scrum-tools
-brew install story-points-analyzer
-```
-
-### Option B — pip (from source)
+### Option A — pip (from source)
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # macOS / Linux
 # .venv\Scripts\activate    # Windows
 pip install .
+```
+
+### Option B — Homebrew (if published)
+
+```bash
+brew tap joaoparis/scrum-tools
+brew install story-points-analyzer
 ```
 
 ---
@@ -44,27 +45,69 @@ Alternatively, copy the template and fill in values manually:
 cp .env.example .env
 ```
 
+### Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `JIRA_BASE_URL` | Always | e.g. `https://your-org.atlassian.net` |
+| `JIRA_TOKEN` | Always | Jira personal access token |
+| `JIRA_PROJECT` | Optional | Limit to one project key, e.g. `NWAP` (strongly recommended — queries span the whole instance otherwise) |
+| `JIRA_FEATURE_TEAM` | Optional | Filter by feature team name, e.g. `Buddy Builders` |
+| `CONFLUENCE_BASE_URL` | `--publish` only | e.g. `https://your-org.atlassian.net/wiki` |
+| `CONFLUENCE_TOKEN` | `--publish` only | Confluence personal access token |
+| `CONFLUENCE_PARENT_PAGE_ID` | `--publish` only | Numeric page ID of the parent page |
+
 ---
 
 ## Usage
 
 ```bash
-# Publish report to Confluence (last 6 months, default)
+# Write report.md locally (default)
 story-points-analyzer
 
-# Analyse a different time window
+# Different time window
 story-points-analyzer --months 3
 
-# Dry run — prints Markdown to stdout, no page written
-story-points-analyzer --dry-run
-story-points-analyzer --months 12 --dry-run
+# Custom output filename
+story-points-analyzer --output sprint42.md
 
-# Upsert a named Confluence page (replaces it if it already exists)
-story-points-analyzer --title "BuddyBuilders Sprint 42"
+# Verbose: print progress per issue + per-bucket timing
+story-points-analyzer --verbose
+
+# Publish to Confluence (requires Confluence env vars)
+story-points-analyzer --publish
+
+# Publish and upsert a named Confluence page (replaces it if it already exists)
+story-points-analyzer --publish --title "BuddyBuilders Sprint 42"
 
 # Show all options
 story-points-analyzer --help
 ```
+
+---
+
+## Sample output
+
+Running the tool produces a Markdown report like this:
+
+```
+# Story Point Accuracy Report
+Period: last 6 months | Issues analysed: 47 | Generated: 2026-06-15
+```
+
+### Per-bucket summary table
+
+| SP | Count | Mean (days) | Median | P75 | P95 | Std Dev | Outliers |
+|----|-------|-------------|--------|-----|-----|---------|----------|
+| 1 | 18 | 2.4 | 2.0 | 3.0 | 5.0 | 1.1 | 0 |
+| 2 | 14 | 4.1 | 3.5 | 5.0 | 9.0 | 2.3 | 2 |
+| 3 | 8 | 5.8 | 5.5 | 7.0 | 11.0 | 2.9 | 1 |
+| 5 | 4 | 9.2 | 8.5 | 11.0 | — | 3.4 | 1 |
+| 8 | 2 | 14.0 | 14.0 | — | — | 0.0 | 0 |
+| 13 | 1 | 21.0 | — | — | — | 0.0 | 0 |
+
+Outlier issues (those with cycle time > mean + 1σ for their bucket) are listed
+beneath the table with their key, summary, and actual cycle days.
 
 ---
 
@@ -73,7 +116,7 @@ story-points-analyzer --help
 | Path | Responsibility |
 |------|---------------|
 | `story_points_analyzer/jira.py` | Jira REST client: JQL queries, changelog parsing, cycle time computation |
-| `story_points_analyzer/report.py` | Stats engine (mean / σ / percentiles / outliers) + Confluence page builder & publisher |
+| `story_points_analyzer/report.py` | Stats engine (mean / σ / percentiles / outliers) + Markdown builder + Confluence publisher |
 | `story_points_analyzer/main.py` | CLI argument parsing and orchestration only |
 | `story_points_analyzer/setup_wizard.py` | Interactive `.env` setup wizard |
 | `pyproject.toml` | Package metadata, dependencies, and `story-points-analyzer` entry point |
@@ -83,6 +126,7 @@ story-points-analyzer --help
 ## Algorithm
 
 ### What is cycle time?
+
 Calendar days from the **first transition into "In Progress"** to the **first
 transition into "Done" / "Closed" / "Resolved"** in the issue's changelog.
 
@@ -91,7 +135,8 @@ Issues are excluded when:
 - They were never transitioned to "In Progress" (e.g. closed directly from backlog)
 
 ### Outlier threshold
-For each story-point bucket (minimum 3 issues):
+
+For each story-point bucket:
 
 ```
 threshold = mean_cycle_days + population_std_dev
@@ -101,14 +146,22 @@ In a normal distribution this marks the slowest ~16% — enough to surface
 genuinely slow issues without flagging half the team every sprint.
 
 ### Buckets with `std_dev = 0`
+
 When every issue in a bucket has the same cycle time the standard deviation is
 zero. No outliers are flagged for that bucket (there is nothing to distinguish).
 
 ---
 
-## Confluence output
+## Publishing to Confluence
 
-- **Space:** NWAP  
-- **Parent page:** `1948993578` (12 Buddy Builders Sprint Retrospective)  
-- **Page title:** `BuddyBuilders — Story Point Accuracy Report`  
-- The script creates the page on first run and updates it on subsequent runs.
+When you run with `--publish`, the tool creates (or upserts) a page under the
+parent you configure via `CONFLUENCE_PARENT_PAGE_ID`. The Space key is inferred
+from that parent page automatically.
+
+Title behaviour:
+- **`--publish`** with no `--title` → creates a new page with an auto-generated
+  timestamp title each run.
+- **`--publish --title "My Page"`** → creates the page if it doesn't exist;
+  replaces it in-place if it does. Use this for a living dashboard that stays
+  at the same URL.
+
