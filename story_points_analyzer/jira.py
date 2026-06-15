@@ -97,21 +97,36 @@ def _fetch_bucket(sp: int, months: int, verbose: bool = False) -> list[Issue]:
     return issues
 
 
+def _get(url: str, params: dict | None = None, retries: int = 5) -> requests.Response:
+    """GET with exponential backoff on 429."""
+    delay = 2.0
+    for attempt in range(retries):
+        resp = requests.get(url, headers=_HEADERS, params=params, timeout=30)
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", delay))
+            wait = max(retry_after, delay)
+            print(f"    rate-limited, retrying in {wait:.0f}s…", flush=True)
+            time.sleep(wait)
+            delay *= 2
+            continue
+        resp.raise_for_status()
+        return resp
+    resp.raise_for_status()
+    return resp
+
+
 def _paginate_jql(jql: str, page_size: int = 100) -> Iterator[dict]:
     start = 0
     while True:
-        resp = requests.get(
+        resp = _get(
             f"{JIRA_BASE_URL}/rest/api/2/search",
-            headers=_HEADERS,
             params={
                 "jql": jql,
                 "startAt": start,
                 "maxResults": page_size,
                 "fields": "summary",
             },
-            timeout=30,
         )
-        resp.raise_for_status()
         data = resp.json()
         issues = data.get("issues", [])
         yield from issues
@@ -121,13 +136,10 @@ def _paginate_jql(jql: str, page_size: int = 100) -> Iterator[dict]:
 
 
 def _fetch_changelog(issue_key: str) -> list[dict]:
-    resp = requests.get(
+    resp = _get(
         f"{JIRA_BASE_URL}/rest/api/2/issue/{issue_key}",
-        headers=_HEADERS,
         params={"expand": "changelog", "fields": ""},
-        timeout=30,
     )
-    resp.raise_for_status()
     return resp.json().get("changelog", {}).get("histories", [])
 
 
