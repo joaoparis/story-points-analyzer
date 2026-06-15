@@ -64,7 +64,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 # Tag and push
 # ---------------------------------------------------------------------------
 
-echo "Tagging $TAG and pushing…"
+echo "Tagging $TAG and pushing..."
 git tag -a "$TAG" -m "$TAG"
 git push origin main
 git push origin "$TAG"
@@ -73,7 +73,7 @@ git push origin "$TAG"
 # Create GitHub release
 # ---------------------------------------------------------------------------
 
-echo "Creating GitHub release…"
+echo "Creating GitHub release..."
 gh release create "$TAG" \
   --title "$TAG" \
   --generate-notes
@@ -84,7 +84,7 @@ gh release create "$TAG" \
 
 TARBALL_URL="https://github.com/$TOOL_REPO/archive/refs/tags/$TAG.tar.gz"
 
-echo "Computing SHA256 for $TARBALL_URL…"
+echo "Computing SHA256 for $TARBALL_URL..."
 SHA256=$(curl -sL "$TARBALL_URL" | shasum -a 256 | awk '{print $1}')
 echo "SHA256: $SHA256"
 
@@ -92,10 +92,11 @@ echo "SHA256: $SHA256"
 # Update Homebrew formula
 # ---------------------------------------------------------------------------
 
-echo "Updating formula…"
+echo "Updating formula..."
 
 sed -i '' "s|url \"https://github.com/$TOOL_REPO/archive/refs/tags/v.*\.tar\.gz\"|url \"$TARBALL_URL\"|" "$FORMULA"
 sed -i '' "/url \"$TARBALL_URL\"/{n;s/sha256 \".*\"/sha256 \"$SHA256\"/;}" "$FORMULA"
+sed -i '' "s/assert_match \"story-points-analyzer .*/assert_match \"story-points-analyzer $VERSION\", shell_output(\"#{bin}\/story-points-analyzer --version\")/" "$FORMULA"
 
 # Bump the formula version comment if present (optional, best-effort)
 cd "$TAP_DIR"
@@ -111,7 +112,7 @@ cd - > /dev/null
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "✓ Released $TAG"
+echo "OK: Released $TAG"
 echo "  GitHub release : https://github.com/$TOOL_REPO/releases/tag/$TAG"
 echo "  Formula        : https://github.com/joaoparis/homebrew-scrum-tools/blob/main/Formula/story-points-analyzer.rb"
 echo ""
