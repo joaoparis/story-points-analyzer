@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from story_points_analyzer.jira import Issue
 _DEFAULT_TITLE_PREFIX = "BuddyBuilders — Story Point Accuracy Report"
 _SPACE_KEY = "PROJ"
 _MIN_BUCKET_SIZE = 1
+_MIN_CLEANED_BUCKET_SIZE = 3
 
 
 @dataclass
@@ -123,6 +125,320 @@ def _percentile(sorted_values: list[float], pct: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Cleaned-buckets computation (outliers removed)
+# ---------------------------------------------------------------------------
+
+def _compute_buckets_cleaned(buckets: list[BucketStats], all_issues: list[Issue]) -> list[BucketStats]:
+    """Recompute bucket stats after removing the outliers identified in the first pass."""
+    outlier_keys: set[str] = {issue.key for b in buckets for issue in b.outliers}
+    clean_issues = [i for i in all_issues if i.key not in outlier_keys]
+
+    grouped: dict[float, list[Issue]] = defaultdict(list)
+    for issue in clean_issues:
+        grouped[issue.story_points].append(issue)
+
+    cleaned: list[BucketStats] = []
+    for sp in sorted(grouped):
+        group = grouped[sp]
+        if len(group) < _MIN_CLEANED_BUCKET_SIZE:
+            continue
+        cleaned.append(_bucket_stats(sp, group))
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Sprint sort helper
+# ---------------------------------------------------------------------------
+
+def _sprint_sort_key(name: str) -> tuple:
+    """Sort sprints by last numeric component, then lexicographically."""
+    numbers = re.findall(r'\d+', name)
+    return (int(numbers[-1]), name) if numbers else (0, name)
+
+
+# ---------------------------------------------------------------------------
+# Cleaned-table section builders
+# ---------------------------------------------------------------------------
+
+def _build_cleaned_table_markdown(cleaned_buckets: list[BucketStats], has_outliers: bool) -> list[str]:
+    lines: list[str] = []
+    lines.append("## 📊 Summary by Story Points (Outliers Removed)")
+    lines.append("")
+    if not has_outliers:
+        lines.append("_No outliers were identified — this table is identical to the summary above._")
+        lines.append("")
+        return lines
+    if not cleaned_buckets:
+        lines.append("_No buckets with 3+ issues remain after removing outliers._")
+        lines.append("")
+        return lines
+    lines.append("| SP | Count | Mean days | Std Dev | Median | P75 | P95 |")
+    lines.append("|----|-------|-----------|---------|--------|-----|-----|")
+    for b in cleaned_buckets:
+        sp_label = int(b.sp) if b.sp == int(b.sp) else b.sp
+        lines.append(
+            f"| {sp_label} | {b.count} | {b.mean:.1f} | {b.std_dev:.1f} "
+            f"| {b.median:.1f} | {b.p75:.1f} | {b.p95:.1f} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _build_cleaned_table_wiki(cleaned_buckets: list[BucketStats], has_outliers: bool) -> list[str]:
+    lines: list[str] = []
+    lines.append("h2. 📊 Summary by Story Points (Outliers Removed)")
+    lines.append("")
+    if not has_outliers:
+        lines.append("_No outliers were identified — this table is identical to the summary above._")
+        lines.append("")
+        return lines
+    if not cleaned_buckets:
+        lines.append("_No buckets with 3+ issues remain after removing outliers._")
+        lines.append("")
+        return lines
+    lines.append("|| SP || Count || Mean days || Std Dev || Median || P75 || P95 ||")
+    for b in cleaned_buckets:
+        sp_label = int(b.sp) if b.sp == int(b.sp) else b.sp
+        lines.append(
+            f"| {sp_label} | {b.count} | {b.mean:.1f} | {b.std_dev:.1f} "
+            f"| {b.median:.1f} | {b.p75:.1f} | {b.p95:.1f} |"
+        )
+    lines.append("")
+    lines.append(
+        "Column guide: "
+        "*SP* — Story Points | "
+        "*Count* — Issues remaining after outlier removal | "
+        "*Mean days* — Average cycle time | "
+        "*Std Dev* — Spread | "
+        "*Median* — P50 | "
+        "*P75* — 75th percentile | "
+        "*P95* — 95th percentile"
+    )
+    lines.append("")
+    return lines
+
+
+def _sprint_display_label(name: str) -> str:
+    """Return a short sprint label.
+
+    'Sprint 2538 | Name of sprint' → '2538'
+    Falls back to the first number found, then the full name.
+    """
+    tokens = name.split()
+    if len(tokens) >= 2 and tokens[1].rstrip("|").isdigit():
+        return tokens[1].rstrip("|")
+    match = re.search(r'\d+', name)
+    return match.group() if match else name
+
+
+# ---------------------------------------------------------------------------
+# Sprint chart section builders
+# ---------------------------------------------------------------------------
+
+def _build_sprint_chart_markdown(issues: list[Issue]) -> list[str]:
+    sprint_issues = [i for i in issues if i.sprint]
+    if not sprint_issues:
+        return [
+            "## 📈 Mean Cycle Days per Sprint by Story Points",
+            "",
+            "_No sprint data found on the fetched issues — chart unavailable._",
+            "",
+        ]
+
+    sprints = sorted({i.sprint for i in sprint_issues}, key=_sprint_sort_key)  # type: ignore[arg-type]
+    sp_buckets_present = sorted({i.story_points for i in sprint_issues})
+
+    matrix: dict[str, dict[float, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for issue in sprint_issues:
+        matrix[issue.sprint][issue.story_points].append(issue.cycle_days)  # type: ignore[index]
+
+    sprint_labels = ", ".join(f'"{_sprint_display_label(s)}"' for s in sprints)
+
+    lines: list[str] = []
+    lines.append("## 📈 Mean Cycle Days per Sprint by Story Points")
+    lines.append("")
+    lines.append(
+        "> ⚠️ **Mermaid limitation:** grouped/clustered bar charts (all SP values side-by-side "
+        "per sprint) are not supported in Mermaid. The full grouped chart is available in the "
+        "Confluence report (`--publish`). The table below shows all values; "
+        "the per-SP charts follow."
+    )
+    lines.append("")
+
+    # Summary data matrix table
+    sp_header = " | ".join(f"SP {int(sp) if sp == int(sp) else sp}" for sp in sp_buckets_present)
+    lines.append(f"| Sprint | {sp_header} |")
+    lines.append("|--------|" + "--------|" * len(sp_buckets_present))
+    for sprint in sprints:
+        label = _sprint_display_label(sprint)
+        cells = []
+        for sp in sp_buckets_present:
+            times = matrix[sprint].get(sp, [])
+            cells.append(f"{sum(times)/len(times):.1f}" if times else "—")
+        lines.append("| " + label + " | " + " | ".join(cells) + " |")
+    lines.append("")
+    lines.append("_Values are mean cycle days. `—` = no issues for that SP in that sprint._")
+    lines.append("")
+
+    for sp in sp_buckets_present:
+        sp_label = int(sp) if sp == int(sp) else sp
+        values: list[str] = []
+        all_sp_means: list[float] = []
+        for sprint in sprints:
+            times = matrix[sprint].get(sp, [])
+            mean = sum(times) / len(times) if times else 0.0
+            values.append(f"{mean:.1f}")
+            if times:
+                all_sp_means.append(mean)
+
+        if not all_sp_means:
+            continue
+
+        y_max = math.ceil(max(all_sp_means) * 1.1) or 10
+
+        lines.append(f"### SP {sp_label}")
+        lines.append("")
+        lines.append("```mermaid")
+        lines.append("xychart-beta")
+        lines.append(f'    title "SP {sp_label} — Mean Cycle Days per Sprint"')
+        lines.append(f'    x-axis [{sprint_labels}]')
+        lines.append(f'    y-axis "Mean Cycle Days" 0 --> {y_max}')
+        lines.append(f'    bar [{", ".join(values)}]')
+        lines.append("```")
+        lines.append("")
+
+    return lines
+
+
+def _build_sprint_chart_wiki(issues: list[Issue]) -> list[str]:
+    sprint_issues = [i for i in issues if i.sprint]
+    if not sprint_issues:
+        return [
+            "h2. 📈 Mean Cycle Days per Sprint by Story Points",
+            "",
+            "_No sprint data found on the fetched issues — chart unavailable._",
+            "",
+        ]
+
+    sprints = sorted({i.sprint for i in sprint_issues}, key=_sprint_sort_key)  # type: ignore[arg-type]
+    sp_buckets_present = sorted({i.story_points for i in sprint_issues})
+
+    matrix: dict[str, dict[float, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for issue in sprint_issues:
+        matrix[issue.sprint][issue.story_points].append(issue.cycle_days)  # type: ignore[index]
+
+    sp_headers = " || ".join(
+        f"SP {int(sp) if sp == int(sp) else sp}" for sp in sp_buckets_present
+    )
+
+    lines: list[str] = []
+    lines.append("h2. 📈 Mean Cycle Days per Sprint by Story Points")
+    lines.append("")
+    lines.append(
+        "{chart:type=bar|title=Mean Cycle Days per Sprint by Story Points"
+        "|yLabel=Mean Cycle Days|legend=true|dataOrientation=vertical}"
+    )
+    lines.append(f"||  || {sp_headers} ||")
+    for sprint in sprints:
+        label = _sprint_display_label(sprint)
+        values = []
+        for sp in sp_buckets_present:
+            times = matrix[sprint].get(sp, [])
+            mean = sum(times) / len(times) if times else 0.0
+            values.append(f"{mean:.1f}")
+        lines.append("| " + label + " | " + " | ".join(values) + " |")
+    lines.append("{chart}")
+    lines.append("")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Issue-distribution histogram section builders
+# ---------------------------------------------------------------------------
+
+def _build_histograms_markdown(buckets: list[BucketStats], all_issues: list[Issue]) -> list[str]:
+    grouped: dict[float, list[Issue]] = defaultdict(list)
+    for issue in all_issues:
+        grouped[issue.story_points].append(issue)
+
+    lines: list[str] = []
+    lines.append("## 📊 Issue Distribution by Cycle Days")
+    lines.append("")
+    lines.append(
+        "_One chart per Story Point bucket — X axis: cycle days (rounded), Y axis: number of issues._"
+    )
+    lines.append("")
+
+    for b in buckets:
+        group = grouped.get(b.sp, [])
+        if not group:
+            continue
+
+        day_counts: dict[int, int] = defaultdict(int)
+        for issue in group:
+            day_counts[round(issue.cycle_days)] += 1
+
+        days_sorted = sorted(day_counts.keys())
+        x_labels = ", ".join(f'"{d}"' for d in days_sorted)
+        y_values = ", ".join(str(day_counts[d]) for d in days_sorted)
+        y_max = max(day_counts.values()) + 1
+        sp_label = int(b.sp) if b.sp == int(b.sp) else b.sp
+
+        lines.append(f"### SP {sp_label}")
+        lines.append("")
+        lines.append("```mermaid")
+        lines.append("xychart-beta")
+        lines.append(f'    title "SP {sp_label} — Issues by Cycle Days"')
+        lines.append(f'    x-axis [{x_labels}]')
+        lines.append(f'    y-axis "Issues" 0 --> {y_max}')
+        lines.append(f'    bar [{y_values}]')
+        lines.append("```")
+        lines.append("")
+
+    return lines
+
+
+def _build_histograms_wiki(buckets: list[BucketStats], all_issues: list[Issue]) -> list[str]:
+    grouped: dict[float, list[Issue]] = defaultdict(list)
+    for issue in all_issues:
+        grouped[issue.story_points].append(issue)
+
+    lines: list[str] = []
+    lines.append("h2. 📊 Issue Distribution by Cycle Days")
+    lines.append("")
+    lines.append(
+        "_One chart per Story Point bucket — X axis: cycle days (rounded), Y axis: number of issues._"
+    )
+    lines.append("")
+
+    for b in buckets:
+        group = grouped.get(b.sp, [])
+        if not group:
+            continue
+
+        day_counts: dict[int, int] = defaultdict(int)
+        for issue in group:
+            day_counts[round(issue.cycle_days)] += 1
+
+        days_sorted = sorted(day_counts.keys())
+        sp_label = int(b.sp) if b.sp == int(b.sp) else b.sp
+
+        lines.append(f"h3. SP {sp_label}")
+        lines.append("")
+        lines.append(
+            f"{{chart:type=bar|title=SP {sp_label} — Issues by Cycle Days"
+            "|yLabel=Issues|xLabel=Cycle Days}"
+        )
+        lines.append("|| Cycle Days || Count ||")
+        for day in days_sorted:
+            lines.append(f"| {day} | {day_counts[day]} |")
+        lines.append("{chart}")
+        lines.append("")
+
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Markdown builder (dry-run / local preview)
 # ---------------------------------------------------------------------------
 
@@ -154,6 +470,11 @@ def _build_markdown(buckets: list[BucketStats], all_issues: list[Issue], months:
 
     lines.append("")
 
+    # Cleaned summary table (outliers removed)
+    has_outliers = any(b.outliers for b in buckets)
+    cleaned_buckets = _compute_buckets_cleaned(buckets, all_issues)
+    lines.extend(_build_cleaned_table_markdown(cleaned_buckets, has_outliers))
+
     # Outliers table
     all_outliers = [(issue, b) for b in buckets for issue in b.outliers]
 
@@ -174,6 +495,12 @@ def _build_markdown(buckets: list[BucketStats], all_issues: list[Issue], months:
     else:
         lines.append("## ✅ No outliers detected")
         lines.append("")
+
+    # Sprint chart
+    lines.extend(_build_sprint_chart_markdown(all_issues))
+
+    # Issue-distribution histograms
+    lines.extend(_build_histograms_markdown(buckets, all_issues))
 
     # Methodology
     lines.append("## 📝 Methodology")
@@ -240,6 +567,11 @@ def _build_wiki(buckets: list[BucketStats], all_issues: list[Issue], months: int
     )
     lines.append("")
 
+    # Cleaned summary table (outliers removed)
+    has_outliers = any(b.outliers for b in buckets)
+    cleaned_buckets = _compute_buckets_cleaned(buckets, all_issues)
+    lines.extend(_build_cleaned_table_wiki(cleaned_buckets, has_outliers))
+
     # Outliers table
     all_outliers = [
         (issue, b)
@@ -271,6 +603,12 @@ def _build_wiki(buckets: list[BucketStats], all_issues: list[Issue], months: int
     else:
         lines.append("h2. ✅ No outliers detected")
         lines.append("")
+
+    # Sprint chart
+    lines.extend(_build_sprint_chart_wiki(all_issues))
+
+    # Issue-distribution histograms
+    lines.extend(_build_histograms_wiki(buckets, all_issues))
 
     # Methodology
     lines.append("h2. 📝 Methodology")
