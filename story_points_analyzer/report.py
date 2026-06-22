@@ -879,13 +879,28 @@ def _xhtml_table(headers: list[str], rows: list[list[str]], raw_cells: bool = Fa
     return "\n".join(lines)
 
 
-def _xhtml_html_macro(html: str) -> str:
-    """Embed raw HTML via the Confluence storage-format HTML macro (CDATA body)."""
+def _xhtml_chart_macro(
+    params: dict[str, str],
+    headers: list[str],
+    rows: list[list[str]],
+) -> str:
+    """Build a Confluence storage-format chart macro with an embedded data table."""
+    param_xml = "".join(
+        f'<ac:parameter ac:name="{k}">{_esc(v)}</ac:parameter>'
+        for k, v in params.items()
+    )
+    header_row = "<tr>" + "".join(f"<th>{_esc(h)}</th>" for h in headers) + "</tr>"
+    data_rows = "".join(
+        "<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in row) + "</tr>"
+        for row in rows
+    )
     return (
-        '<ac:structured-macro ac:name="html" ac:schema-version="1">'
-        "<ac:plain-text-body><![CDATA[\n"
-        + html
-        + "\n]]></ac:plain-text-body></ac:structured-macro>"
+        f'<ac:structured-macro ac:name="chart" ac:schema-version="1">'
+        f"{param_xml}"
+        f"<ac:rich-text-body><table><tbody>"
+        f"{header_row}{data_rows}"
+        f"</tbody></table></ac:rich-text-body>"
+        f"</ac:structured-macro>"
     )
 
 
@@ -974,21 +989,29 @@ def _build_storage(buckets: list[BucketStats], all_issues: list[Issue], months: 
         for issue in sprint_issues:
             matrix[issue.sprint][issue.story_points].append(issue.cycle_days)  # type: ignore[index]
         sprint_labels = [_sprint_display_label(s) for s in sprints]
-        datasets: list[tuple[str, list[float]]] = []
-        for sp in sp_buckets_present:
-            sp_label = int(sp) if sp == int(sp) else sp
-            vals = [
-                sum(matrix[sprint].get(sp, [])) / len(matrix[sprint].get(sp, [1]))
-                if matrix[sprint].get(sp) else 0.0
-                for sprint in sprints
-            ]
-            datasets.append((f"SP {sp_label}", vals))
-        svg = _svg_grouped_bar_chart(
-            sprint_labels, datasets,
-            title="Mean Cycle Days per Sprint by Story Points",
-            y_label="Mean Cycle Days",
-        )
-        parts.append(_xhtml_html_macro(svg))
+
+        chart_headers = [""] + [f"SP {int(sp) if sp == int(sp) else sp}" for sp in sp_buckets_present]
+        chart_rows = []
+        for i, sprint in enumerate(sprints):
+            row = [sprint_labels[i]]
+            for sp in sp_buckets_present:
+                times = matrix[sprint].get(sp, [])
+                row.append(f"{sum(times)/len(times):.1f}" if times else "0")
+            chart_rows.append(row)
+
+        parts.append(_xhtml_chart_macro(
+            params={
+                "type": "bar",
+                "title": "Mean Cycle Days per Sprint by Story Points",
+                "yLabel": "Mean Cycle Days",
+                "legend": "true",
+                "dataOrientation": "vertical",
+                "width": "900",
+                "height": "500",
+            },
+            headers=chart_headers,
+            rows=chart_rows,
+        ))
 
     # ---- Histograms --------------------------------------------------------
     parts.append("<h2>📊 Issue Distribution by Cycle Days</h2>")
@@ -1006,14 +1029,18 @@ def _build_storage(buckets: list[BucketStats], all_issues: list[Issue], months: 
         days_sorted = sorted(day_counts.keys())
         sp_label = int(b.sp) if b.sp == int(b.sp) else b.sp
         parts.append(f"<h3>SP {sp_label}</h3>")
-        svg = _svg_bar_chart(
-            labels=[str(d) for d in days_sorted],
-            values=[float(day_counts[d]) for d in days_sorted],
-            title=f"SP {sp_label} — Issues by Cycle Days",
-            x_label="Cycle Days",
-            y_label="Issues",
-        )
-        parts.append(_xhtml_html_macro(svg))
+        parts.append(_xhtml_chart_macro(
+            params={
+                "type": "bar",
+                "title": f"SP {sp_label} — Issues by Cycle Days",
+                "yLabel": "Issues",
+                "xLabel": "Cycle Days",
+                "width": "700",
+                "height": "400",
+            },
+            headers=["Cycle Days", "Count"],
+            rows=[[str(d), str(day_counts[d])] for d in days_sorted],
+        ))
 
     # ---- Methodology -------------------------------------------------------
     parts.append("<h2>📝 Methodology</h2>")
