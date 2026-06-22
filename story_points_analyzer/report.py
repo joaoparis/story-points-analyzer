@@ -56,7 +56,7 @@ def publish_to_confluence(issues: list[Issue], months: int, title: str | None = 
     _check_confluence_env()
     buckets = _compute_buckets(issues)
     page_title = title or _auto_title()
-    _upsert_confluence_page(_build_wiki(buckets, issues, months), page_title, upsert=title is not None)
+    _upsert_confluence_page(_build_storage(buckets, issues, months), page_title, upsert=title is not None)
 
 
 def _check_confluence_env() -> None:
@@ -859,6 +859,176 @@ def _build_wiki(buckets: list[BucketStats], all_issues: list[Issue], months: int
 
 
 # ---------------------------------------------------------------------------
+# Confluence storage format builder (XHTML)
+# ---------------------------------------------------------------------------
+
+def _esc(text: str) -> str:
+    """Escape text for embedding in XHTML storage format."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _xhtml_table(headers: list[str], rows: list[list[str]], raw_cells: bool = False) -> str:
+    """Build a Confluence storage-format table. Set raw_cells=True to skip escaping cell content."""
+    lines = ["<table><tbody>"]
+    if headers:
+        lines.append("<tr>" + "".join(f"<th><strong>{_esc(h)}</strong></th>" for h in headers) + "</tr>")
+    for row in rows:
+        cells = "".join(f"<td>{c if raw_cells else _esc(c)}</td>" for c in row)
+        lines.append(f"<tr>{cells}</tr>")
+    lines.append("</tbody></table>")
+    return "\n".join(lines)
+
+
+def _xhtml_html_macro(html: str) -> str:
+    """Embed raw HTML via the Confluence storage-format HTML macro (CDATA body)."""
+    return (
+        '<ac:structured-macro ac:name="html" ac:schema-version="1">'
+        "<ac:plain-text-body><![CDATA[\n"
+        + html
+        + "\n]]></ac:plain-text-body></ac:structured-macro>"
+    )
+
+
+def _build_storage(buckets: list[BucketStats], all_issues: list[Issue], months: int) -> str:
+    """Build the report as Confluence storage format (XHTML)."""
+    analysed = sum(b.count for b in buckets)
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    jira_base = os.environ["JIRA_BASE_URL"]
+
+    parts: list[str] = []
+
+    parts.append(
+        f"<p><em>Generated: {_esc(generated)} | Window: last {months} months "
+        f"| Issues analysed: {analysed}</em></p>"
+    )
+
+    # ---- Main summary table ------------------------------------------------
+    parts.append("<h2>📊 Summary by Story Points</h2>")
+    headers = ["SP", "Count", "Mean days", "Std Dev", "Median", "P75", "P95", "Outliers"]
+    rows = []
+    for b in buckets:
+        outlier_pct = int(round(len(b.outliers) / b.count * 100)) if b.count else 0
+        outlier_cell = f"{len(b.outliers)} ({outlier_pct}%)" if b.outliers else "—"
+        sp_label = str(int(b.sp) if b.sp == int(b.sp) else b.sp)
+        rows.append([
+            sp_label, str(b.count), f"{b.mean:.1f}", f"{b.std_dev:.1f}",
+            f"{b.median:.1f}", f"{b.p75:.1f}", f"{b.p95:.1f}", outlier_cell,
+        ])
+    parts.append(_xhtml_table(headers, rows))
+    parts.append(
+        "<p><em>SP — Story Points | Count — Issues in bucket | Mean days — Average cycle time | "
+        "Std Dev — Spread | Median — P50 | P75 — 75th percentile | P95 — 95th percentile | "
+        "Outliers — cycle time &gt; mean + 1σ</em></p>"
+    )
+
+    # ---- Cleaned summary table ---------------------------------------------
+    has_outliers = any(b.outliers for b in buckets)
+    cleaned_buckets = _compute_buckets_cleaned(buckets, all_issues)
+    parts.append("<h2>📊 Summary by Story Points (Outliers Removed)</h2>")
+    if not has_outliers:
+        parts.append("<p><em>No outliers were identified — this table is identical to the summary above.</em></p>")
+    elif not cleaned_buckets:
+        parts.append("<p><em>No buckets with 3+ issues remain after removing outliers.</em></p>")
+    else:
+        clean_headers = ["SP", "Count", "Mean days", "Std Dev", "Median", "P75", "P95"]
+        clean_rows = []
+        for b in cleaned_buckets:
+            sp_label = str(int(b.sp) if b.sp == int(b.sp) else b.sp)
+            clean_rows.append([
+                sp_label, str(b.count), f"{b.mean:.1f}", f"{b.std_dev:.1f}",
+                f"{b.median:.1f}", f"{b.p75:.1f}", f"{b.p95:.1f}",
+            ])
+        parts.append(_xhtml_table(clean_headers, clean_rows))
+
+    # ---- Outliers table ----------------------------------------------------
+    all_outliers = [(issue, b) for b in buckets for issue in b.outliers]
+    if all_outliers:
+        parts.append("<h2>⚠️ Outliers (cycle time &gt; mean + 1σ for their SP group)</h2>")
+        o_headers = ["Issue", "Summary", "SP", "Cycle days", "Ceiling", "Over by"]
+        o_rows = []
+        for issue, b in sorted(all_outliers, key=lambda t: t[0].cycle_days, reverse=True):
+            over_by = issue.cycle_days - b.outlier_threshold
+            sp_label = str(int(b.sp) if b.sp == int(b.sp) else b.sp)
+            issue_url = f"{jira_base}/browse/{issue.key}"
+            o_rows.append([
+                f'<a href="{_esc(issue_url)}">{_esc(issue.key)}</a>',
+                _esc(issue.summary),
+                sp_label,
+                f"{issue.cycle_days:.1f}",
+                f"{b.outlier_threshold:.1f} d",
+                f"+{over_by:.1f} d",
+            ])
+        parts.append(_xhtml_table(o_headers, o_rows, raw_cells=True))
+    else:
+        parts.append("<h2>✅ No outliers detected</h2>")
+
+    # ---- Sprint chart ------------------------------------------------------
+    sprint_issues = [i for i in all_issues if i.sprint]
+    parts.append("<h2>📈 Mean Cycle Days per Sprint by Story Points</h2>")
+    if not sprint_issues:
+        parts.append("<p><em>No sprint data found on the fetched issues — chart unavailable.</em></p>")
+    else:
+        sprints = sorted({i.sprint for i in sprint_issues}, key=_sprint_sort_key)  # type: ignore[arg-type]
+        sp_buckets_present = sorted({i.story_points for i in sprint_issues})
+        matrix: dict[str, dict[float, list[float]]] = defaultdict(lambda: defaultdict(list))
+        for issue in sprint_issues:
+            matrix[issue.sprint][issue.story_points].append(issue.cycle_days)  # type: ignore[index]
+        sprint_labels = [_sprint_display_label(s) for s in sprints]
+        datasets: list[tuple[str, list[float]]] = []
+        for sp in sp_buckets_present:
+            sp_label = int(sp) if sp == int(sp) else sp
+            vals = [
+                sum(matrix[sprint].get(sp, [])) / len(matrix[sprint].get(sp, [1]))
+                if matrix[sprint].get(sp) else 0.0
+                for sprint in sprints
+            ]
+            datasets.append((f"SP {sp_label}", vals))
+        svg = _svg_grouped_bar_chart(
+            sprint_labels, datasets,
+            title="Mean Cycle Days per Sprint by Story Points",
+            y_label="Mean Cycle Days",
+        )
+        parts.append(_xhtml_html_macro(svg))
+
+    # ---- Histograms --------------------------------------------------------
+    parts.append("<h2>📊 Issue Distribution by Cycle Days</h2>")
+    parts.append("<p><em>One chart per Story Point bucket — X axis: cycle days (rounded), Y axis: number of issues.</em></p>")
+    grouped_by_sp: dict[float, list[Issue]] = defaultdict(list)
+    for issue in all_issues:
+        grouped_by_sp[issue.story_points].append(issue)
+    for b in buckets:
+        group = grouped_by_sp.get(b.sp, [])
+        if not group:
+            continue
+        day_counts: dict[int, int] = defaultdict(int)
+        for issue in group:
+            day_counts[round(issue.cycle_days)] += 1
+        days_sorted = sorted(day_counts.keys())
+        sp_label = int(b.sp) if b.sp == int(b.sp) else b.sp
+        parts.append(f"<h3>SP {sp_label}</h3>")
+        svg = _svg_bar_chart(
+            labels=[str(d) for d in days_sorted],
+            values=[float(day_counts[d]) for d in days_sorted],
+            title=f"SP {sp_label} — Issues by Cycle Days",
+            x_label="Cycle Days",
+            y_label="Issues",
+        )
+        parts.append(_xhtml_html_macro(svg))
+
+    # ---- Methodology -------------------------------------------------------
+    parts.append("<h2>📝 Methodology</h2>")
+    parts.append(
+        "<p>Cycle time = calendar days from first <em>In Progress</em> transition to first "
+        "<em>Done/Closed/Resolved</em> transition.</p>"
+    )
+    parts.append("<p>Outlier = cycle time &gt; mean + 1 standard deviation within the same SP bucket.</p>")
+    parts.append("<p>All SP buckets are included regardless of size.</p>")
+    parts.append("<p>Issues without story points or without an <em>In Progress</em> transition are excluded.</p>")
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Confluence page upsert
 # ---------------------------------------------------------------------------
 
@@ -906,13 +1076,13 @@ def _create_page(markup: str, title: str) -> str:
         "title": title,
         "space": {"key": _SPACE_KEY},
         "ancestors": [{"id": os.environ["CONFLUENCE_PARENT_PAGE_ID"]}],
-        "body": {"wiki": {"value": markup, "representation": "wiki"}},
+        "body": {"storage": {"value": markup, "representation": "storage"}},
     }
     resp = requests.post(
         f"{os.environ['CONFLUENCE_BASE_URL']}/rest/api/content",
         headers=_confluence_headers(),
         json=payload,
-        timeout=15,
+        timeout=30,
     )
     resp.raise_for_status()
     return resp.json()["id"]
@@ -923,13 +1093,13 @@ def _update_page(page_id: str, new_version: int, markup: str, title: str) -> Non
         "type": "page",
         "title": title,
         "version": {"number": new_version},
-        "body": {"wiki": {"value": markup, "representation": "wiki"}},
+        "body": {"storage": {"value": markup, "representation": "storage"}},
     }
     resp = requests.put(
         f"{os.environ['CONFLUENCE_BASE_URL']}/rest/api/content/{page_id}",
         headers=_confluence_headers(),
         json=payload,
-        timeout=15,
+        timeout=30,
     )
     resp.raise_for_status()
 
