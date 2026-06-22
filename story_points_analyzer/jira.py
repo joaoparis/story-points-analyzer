@@ -12,6 +12,7 @@ Two-phase approach per bucket:
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +26,7 @@ JIRA_PROJECT = os.environ.get("JIRA_PROJECT", "")
 JIRA_FEATURE_TEAM = os.environ.get("JIRA_FEATURE_TEAM", "")
 
 _SP_BUCKETS = [1, 2, 3, 5, 8, 13]
+_SPRINT_FIELD_NAME = "sprint"  # matched case-insensitively against the Jira fields API
 
 _IN_PROGRESS_STATUS = "in progress"
 _DONE_STATUSES = {"done", "closed", "resolved"}
@@ -41,6 +43,7 @@ class Issue:
     summary: str
     story_points: float
     cycle_days: float
+    sprint: str | None = None
 
 
 def fetch_issues(months: int = 6, verbose: bool = False) -> list[Issue]:
@@ -48,11 +51,17 @@ def fetch_issues(months: int = 6, verbose: bool = False) -> list[Issue]:
     if not JIRA_PROJECT:
         print("Warning: JIRA_PROJECT is not set. Querying all projects — this may be slow.")
 
+    sprint_field_id = _discover_sprint_field_id()
+    if sprint_field_id:
+        print(f"  Sprint field detected: {sprint_field_id}", flush=True)
+    else:
+        print("  Sprint field not found — sprint chart will be unavailable.", flush=True)
+
     all_issues: list[Issue] = []
     for sp in _SP_BUCKETS:
         t0 = time.time()
         print(f"  SP={sp}: fetching…", flush=True)
-        bucket_issues = _fetch_bucket(sp, months, verbose=verbose)
+        bucket_issues = _fetch_bucket(sp, months, sprint_field_id=sprint_field_id, verbose=verbose)
         elapsed = time.time() - t0
         print(f"  SP={sp}: {len(bucket_issues)} issues ({elapsed:.0f}s).", flush=True)
         all_issues.extend(bucket_issues)
@@ -63,7 +72,7 @@ def fetch_issues(months: int = 6, verbose: bool = False) -> list[Issue]:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_bucket(sp: int, months: int, verbose: bool = False) -> list[Issue]:
+def _fetch_bucket(sp: int, months: int, sprint_field_id: str | None = None, verbose: bool = False) -> list[Issue]:
     """Phase 1: collect issue keys. Phase 2: fetch changelogs one by one."""
     project_clause = f'AND project = {JIRA_PROJECT} ' if JIRA_PROJECT else ''
     team_clause = f'AND "Feature Team" = "{JIRA_FEATURE_TEAM}" ' if JIRA_FEATURE_TEAM else ''
@@ -78,7 +87,7 @@ def _fetch_bucket(sp: int, months: int, verbose: bool = False) -> list[Issue]:
         f'ORDER BY updated DESC'
     )
 
-    raw_issues = list(_paginate_jql(jql))
+    raw_issues = list(_paginate_jql(jql, sprint_field_id=sprint_field_id))
     total = len(raw_issues)
 
     issues: list[Issue] = []
@@ -88,11 +97,16 @@ def _fetch_bucket(sp: int, months: int, verbose: bool = False) -> list[Issue]:
         histories = _fetch_changelog(raw["key"])
         cycle_days = _compute_cycle_days(histories)
         if cycle_days is not None:
+            sprint = (
+                _parse_sprint_name(raw.get("fields", {}).get(sprint_field_id))
+                if sprint_field_id else None
+            )
             issues.append(Issue(
                 key=raw["key"],
                 summary=raw.get("fields", {}).get("summary", ""),
                 story_points=float(sp),
                 cycle_days=cycle_days,
+                sprint=sprint,
             ))
     return issues
 
@@ -115,7 +129,8 @@ def _get(url: str, params: dict | None = None, retries: int = 5) -> requests.Res
     return resp
 
 
-def _paginate_jql(jql: str, page_size: int = 100) -> Iterator[dict]:
+def _paginate_jql(jql: str, page_size: int = 100, sprint_field_id: str | None = None) -> Iterator[dict]:
+    fields = "summary" if not sprint_field_id else f"summary,{sprint_field_id}"
     start = 0
     while True:
         resp = _get(
@@ -124,7 +139,7 @@ def _paginate_jql(jql: str, page_size: int = 100) -> Iterator[dict]:
                 "jql": jql,
                 "startAt": start,
                 "maxResults": page_size,
-                "fields": "summary",
+                "fields": fields,
             },
         )
         data = resp.json()
@@ -141,6 +156,38 @@ def _fetch_changelog(issue_key: str) -> list[dict]:
         params={"expand": "changelog", "fields": ""},
     )
     return resp.json().get("changelog", {}).get("histories", [])
+
+
+def _discover_sprint_field_id() -> str | None:
+    """Call the Jira fields API to find the field ID whose name is 'Sprint'."""
+    try:
+        resp = _get(f"{JIRA_BASE_URL}/rest/api/2/field")
+        for field in resp.json():
+            if field.get("name", "").strip().lower() == _SPRINT_FIELD_NAME:
+                return field["id"]
+    except Exception:
+        pass
+    return None
+
+
+def _parse_sprint_name(sprint_field) -> str | None:
+    """Extract the most recent sprint name from the Jira sprint field value.
+
+    Handles both list-of-dicts (Jira Cloud / modern Data Center) and the
+    legacy toString string format (older Jira Server).
+    """
+    if not sprint_field or not isinstance(sprint_field, list):
+        return None
+    for item in reversed(sprint_field):
+        if isinstance(item, dict):
+            name = item.get("name")
+            if name:
+                return str(name)
+        elif isinstance(item, str):
+            match = re.search(r'name=([^,\]]+)', item)
+            if match:
+                return match.group(1).strip()
+    return None
 
 
 def _compute_cycle_days(histories: list[dict]) -> float | None:
