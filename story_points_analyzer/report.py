@@ -218,6 +218,234 @@ def _build_cleaned_table_wiki(cleaned_buckets: list[BucketStats], has_outliers: 
     return lines
 
 
+_CHART_COLORS = [
+    "#4C9BE8", "#F5A623", "#7ED321", "#E8585A", "#9B59B6", "#1ABC9C",
+]
+
+
+def _svg_grouped_bar_chart(
+    labels: list[str],
+    datasets: list[tuple[str, list[float]]],
+    title: str,
+    y_label: str = "Value",
+    width: int = 820,
+    height: int = 460,
+) -> str:
+    """Produce a self-contained SVG grouped bar chart."""
+    n_groups = len(labels)
+    n_series = len(datasets)
+    if n_groups == 0 or n_series == 0:
+        return ""
+
+    m_top, m_right, m_bottom, m_left = 50, 160, 70, 70
+    plot_w = width - m_left - m_right
+    plot_h = height - m_top - m_bottom
+
+    all_vals = [v for _, vals in datasets for v in vals if v > 0]
+    y_max_val = (max(all_vals) * 1.15) if all_vals else 10
+
+    group_w = plot_w / n_groups
+    bar_padding = 0.12
+    inner_w = group_w * (1 - bar_padding * 2)
+    bar_w = inner_w / n_series
+
+    def x_bar(gi: int, si: int) -> float:
+        return m_left + gi * group_w + group_w * bar_padding + si * bar_w
+
+    def y_px(v: float) -> float:
+        return m_top + plot_h - (v / y_max_val) * plot_h
+
+    p: list[str] = []
+    p.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" style="font-family:Arial,sans-serif;background:#fff">'
+    )
+
+    # Title
+    p.append(
+        f'<text x="{(m_left + m_left + plot_w) // 2}" y="30" text-anchor="middle" '
+        f'font-size="15" font-weight="bold" fill="#222">{title}</text>'
+    )
+
+    # Y-axis gridlines + labels
+    n_ticks = 5
+    for i in range(n_ticks + 1):
+        v = y_max_val * i / n_ticks
+        y = y_px(v)
+        p.append(
+            f'<line x1="{m_left}" y1="{y:.1f}" x2="{m_left + plot_w}" y2="{y:.1f}" '
+            f'stroke="#e8e8e8" stroke-width="1"/>'
+        )
+        p.append(
+            f'<text x="{m_left - 6}" y="{y + 4:.1f}" text-anchor="end" '
+            f'font-size="11" fill="#666">{v:.1f}</text>'
+        )
+
+    # Y-axis label
+    cx = 16
+    cy = m_top + plot_h // 2
+    p.append(
+        f'<text transform="rotate(-90,{cx},{cy})" x="{cx}" y="{cy}" '
+        f'text-anchor="middle" font-size="12" fill="#555">{y_label}</text>'
+    )
+
+    # Axes
+    p.append(
+        f'<line x1="{m_left}" y1="{m_top}" x2="{m_left}" y2="{m_top + plot_h}" '
+        f'stroke="#aaa" stroke-width="1.5"/>'
+    )
+    p.append(
+        f'<line x1="{m_left}" y1="{m_top + plot_h}" x2="{m_left + plot_w}" '
+        f'y2="{m_top + plot_h}" stroke="#aaa" stroke-width="1.5"/>'
+    )
+
+    # Bars
+    for si, (_, values) in enumerate(datasets):
+        color = _CHART_COLORS[si % len(_CHART_COLORS)]
+        for gi, v in enumerate(values):
+            if v <= 0:
+                continue
+            x = x_bar(gi, si)
+            bh = (v / y_max_val) * plot_h
+            y = m_top + plot_h - bh
+            p.append(
+                f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
+                f'fill="{color}" opacity="0.87" rx="2"/>'
+            )
+            # value label on bar if tall enough
+            if bh > 16:
+                p.append(
+                    f'<text x="{x + bar_w / 2:.1f}" y="{y + 12:.1f}" text-anchor="middle" '
+                    f'font-size="9" fill="white" font-weight="bold">{v:.1f}</text>'
+                )
+
+    # X-axis labels
+    for gi, label in enumerate(labels):
+        xc = m_left + gi * group_w + group_w / 2
+        p.append(
+            f'<text x="{xc:.1f}" y="{m_top + plot_h + 18}" text-anchor="middle" '
+            f'font-size="12" fill="#444">{label}</text>'
+        )
+
+    # Legend
+    lx = m_left + plot_w + 16
+    for si, (name, _) in enumerate(datasets):
+        color = _CHART_COLORS[si % len(_CHART_COLORS)]
+        ly = m_top + si * 24
+        p.append(f'<rect x="{lx}" y="{ly}" width="14" height="14" fill="{color}" rx="2"/>')
+        p.append(
+            f'<text x="{lx + 19}" y="{ly + 11}" font-size="12" fill="#333">{name}</text>'
+        )
+
+    p.append("</svg>")
+    return "\n".join(p)
+
+
+def _svg_bar_chart(
+    labels: list[str],
+    values: list[float],
+    title: str,
+    x_label: str = "",
+    y_label: str = "Value",
+    width: int = 720,
+    height: int = 380,
+) -> str:
+    """Produce a self-contained SVG single-series bar chart."""
+    if not labels or not values:
+        return ""
+
+    m_top, m_right, m_bottom, m_left = 50, 30, 60, 60
+    plot_w = width - m_left - m_right
+    plot_h = height - m_top - m_bottom
+
+    y_max_val = (max(values) * 1.15) if values else 1
+    bar_w = plot_w / len(labels) * 0.7
+    bar_gap = plot_w / len(labels) * 0.3
+
+    def x_bar(i: int) -> float:
+        slot = plot_w / len(labels)
+        return m_left + i * slot + slot * 0.15
+
+    def y_px(v: float) -> float:
+        return m_top + plot_h - (v / y_max_val) * plot_h
+
+    p: list[str] = []
+    p.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" style="font-family:Arial,sans-serif;background:#fff">'
+    )
+
+    p.append(
+        f'<text x="{(m_left + m_left + plot_w) // 2}" y="30" text-anchor="middle" '
+        f'font-size="14" font-weight="bold" fill="#222">{title}</text>'
+    )
+
+    n_ticks = 4
+    for i in range(n_ticks + 1):
+        v = y_max_val * i / n_ticks
+        y = y_px(v)
+        p.append(
+            f'<line x1="{m_left}" y1="{y:.1f}" x2="{m_left + plot_w}" y2="{y:.1f}" '
+            f'stroke="#e8e8e8" stroke-width="1"/>'
+        )
+        p.append(
+            f'<text x="{m_left - 6}" y="{y + 4:.1f}" text-anchor="end" '
+            f'font-size="11" fill="#666">{int(v) if v == int(v) else v:.1f}</text>'
+        )
+
+    cx, cy = 16, m_top + plot_h // 2
+    p.append(
+        f'<text transform="rotate(-90,{cx},{cy})" x="{cx}" y="{cy}" '
+        f'text-anchor="middle" font-size="12" fill="#555">{y_label}</text>'
+    )
+
+    p.append(
+        f'<line x1="{m_left}" y1="{m_top}" x2="{m_left}" y2="{m_top + plot_h}" '
+        f'stroke="#aaa" stroke-width="1.5"/>'
+    )
+    p.append(
+        f'<line x1="{m_left}" y1="{m_top + plot_h}" x2="{m_left + plot_w}" '
+        f'y2="{m_top + plot_h}" stroke="#aaa" stroke-width="1.5"/>'
+    )
+
+    color = _CHART_COLORS[0]
+    for i, v in enumerate(values):
+        x = x_bar(i)
+        bh = (v / y_max_val) * plot_h
+        y = m_top + plot_h - bh
+        p.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
+            f'fill="{color}" opacity="0.85" rx="2"/>'
+        )
+        if bh > 14:
+            p.append(
+                f'<text x="{x + bar_w / 2:.1f}" y="{y + 12:.1f}" text-anchor="middle" '
+                f'font-size="10" fill="white" font-weight="bold">{int(v) if v == int(v) else v}</text>'
+            )
+
+    for i, label in enumerate(labels):
+        slot = plot_w / len(labels)
+        xc = m_left + i * slot + slot / 2
+        p.append(
+            f'<text x="{xc:.1f}" y="{m_top + plot_h + 18}" text-anchor="middle" '
+            f'font-size="11" fill="#444">{label}</text>'
+        )
+
+    if x_label:
+        p.append(
+            f'<text x="{m_left + plot_w // 2}" y="{height - 6}" text-anchor="middle" '
+            f'font-size="12" fill="#555">{x_label}</text>'
+        )
+
+    p.append("</svg>")
+    return "\n".join(p)
+
+
+def _html_macro(html: str) -> str:
+    """Wrap HTML content in the Confluence wiki HTML macro."""
+    return f"{{html}}\n{html}\n{{html}}"
+
+
 def _sprint_display_label(name: str) -> str:
     """Return a short sprint label.
 
@@ -327,27 +555,27 @@ def _build_sprint_chart_wiki(issues: list[Issue]) -> list[str]:
     for issue in sprint_issues:
         matrix[issue.sprint][issue.story_points].append(issue.cycle_days)  # type: ignore[index]
 
-    sp_headers = " || ".join(
-        f"SP {int(sp) if sp == int(sp) else sp}" for sp in sp_buckets_present
-    )
-
     lines: list[str] = []
     lines.append("h2. 📈 Mean Cycle Days per Sprint by Story Points")
     lines.append("")
-    lines.append(
-        "{chart:type=bar|title=Mean Cycle Days per Sprint by Story Points"
-        "|yLabel=Mean Cycle Days|legend=true|dataOrientation=vertical}"
-    )
-    lines.append(f"||  || {sp_headers} ||")
-    for sprint in sprints:
-        label = _sprint_display_label(sprint)
-        values = []
-        for sp in sp_buckets_present:
+
+    datasets: list[tuple[str, list[float]]] = []
+    sprint_labels = [_sprint_display_label(s) for s in sprints]
+    for sp in sp_buckets_present:
+        sp_label = int(sp) if sp == int(sp) else sp
+        vals = []
+        for sprint in sprints:
             times = matrix[sprint].get(sp, [])
-            mean = sum(times) / len(times) if times else 0.0
-            values.append(f"{mean:.1f}")
-        lines.append("| " + label + " | " + " | ".join(values) + " |")
-    lines.append("{chart}")
+            vals.append(sum(times) / len(times) if times else 0.0)
+        datasets.append((f"SP {sp_label}", vals))
+
+    svg = _svg_grouped_bar_chart(
+        sprint_labels,
+        datasets,
+        title="Mean Cycle Days per Sprint by Story Points",
+        y_label="Mean Cycle Days",
+    )
+    lines.append(_html_macro(svg))
     lines.append("")
     return lines
 
@@ -425,14 +653,14 @@ def _build_histograms_wiki(buckets: list[BucketStats], all_issues: list[Issue]) 
 
         lines.append(f"h3. SP {sp_label}")
         lines.append("")
-        lines.append(
-            f"{{chart:type=bar|title=SP {sp_label} — Issues by Cycle Days"
-            "|yLabel=Issues|xLabel=Cycle Days}"
+        svg = _svg_bar_chart(
+            labels=[str(d) for d in days_sorted],
+            values=[float(day_counts[d]) for d in days_sorted],
+            title=f"SP {sp_label} — Issues by Cycle Days",
+            x_label="Cycle Days",
+            y_label="Issues",
         )
-        lines.append("|| Cycle Days || Count ||")
-        for day in days_sorted:
-            lines.append(f"| {day} | {day_counts[day]} |")
-        lines.append("{chart}")
+        lines.append(_html_macro(svg))
         lines.append("")
 
     return lines
