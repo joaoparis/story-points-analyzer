@@ -15,7 +15,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterator
 
 import requests
@@ -211,7 +211,33 @@ def _compute_cycle_days(histories: list[dict]) -> float | None:
     if done_at < in_progress_at:
         return None
 
-    return (done_at - in_progress_at).total_seconds() / 86_400
+    return _weekday_days(in_progress_at, done_at)
+
+
+def _weekday_days(start: datetime, end: datetime) -> float:
+    """Count Mon–Fri days between two datetimes, excluding weekend days entirely."""
+    if end <= start:
+        return 0.0
+
+    d = start.date()
+    end_d = end.date()
+    count = 0
+
+    # Count complete weekdays in [start.date(), end.date())
+    while d < end_d:
+        if d.weekday() < 5:  # Mon=0 … Fri=4
+            count += 1
+        d += timedelta(days=1)
+
+    # Add the fraction of the final day elapsed (only if it's a weekday)
+    if end_d.weekday() < 5:
+        count += (end.hour * 3600 + end.minute * 60 + end.second) / 86_400
+
+    # Subtract the fraction already elapsed on the start day (only if it's a weekday)
+    if start.date().weekday() < 5:
+        count -= (start.hour * 3600 + start.minute * 60 + start.second) / 86_400
+
+    return max(0.0, float(count))
 
 
 def _parse_dt(value: str) -> datetime:

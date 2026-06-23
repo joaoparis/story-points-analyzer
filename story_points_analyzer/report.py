@@ -734,7 +734,7 @@ def _build_markdown(buckets: list[BucketStats], all_issues: list[Issue], months:
     lines.append("## 📝 Methodology")
     lines.append("")
     lines.append(
-        "Cycle time = calendar days from first _In Progress_ transition to first "
+        "Cycle time = working days (Mon–Fri) from first _In Progress_ transition to first "
         "_Done/Closed/Resolved_ transition."
     )
     lines.append(
@@ -842,7 +842,7 @@ def _build_wiki(buckets: list[BucketStats], all_issues: list[Issue], months: int
     lines.append("h2. 📝 Methodology")
     lines.append("")
     lines.append(
-        "Cycle time = calendar days from first _In Progress_ transition to first "
+        "Cycle time = working days (Mon–Fri) from first _In Progress_ transition to first "
         "_Done/Closed/Resolved_ transition."
     )
     lines.append(
@@ -1045,7 +1045,7 @@ def _build_storage(buckets: list[BucketStats], all_issues: list[Issue], months: 
     # ---- Methodology -------------------------------------------------------
     parts.append("<h2>📝 Methodology</h2>")
     parts.append(
-        "<p>Cycle time = calendar days from first <em>In Progress</em> transition to first "
+        "<p>Cycle time = working days (Mon–Fri) from first <em>In Progress</em> transition to first "
         "<em>Done/Closed/Resolved</em> transition.</p>"
     )
     parts.append("<p>Outlier = cycle time &gt; mean + 1 standard deviation within the same SP bucket.</p>")
