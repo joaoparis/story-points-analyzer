@@ -6,3 +6,8 @@ output_*.md
 .copilot/
 *.egg-info/
 dist/
+# Generated report artifacts (may contain real ticket data)
+report.md
+
+# Local agent context — contains internal identifiers
+.github/copilot-instructions.md

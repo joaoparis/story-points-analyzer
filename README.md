@@ -51,11 +51,12 @@ cp .env.example .env
 |---|---|---|
 | `JIRA_BASE_URL` | Always | e.g. `https://your-org.atlassian.net` |
 | `JIRA_TOKEN` | Always | Jira personal access token |
-| `JIRA_PROJECT` | Optional | Limit to one project key, e.g. `PROJ` (strongly recommended — queries span the whole instance otherwise) |
+| `JIRA_PROJECT` | Optional | Limit to one project key, e.g. `MYPROJ` (strongly recommended — queries span the whole instance otherwise) |
 | `JIRA_FEATURE_TEAM` | Optional | Filter by feature team name, e.g. `Buddy Builders` |
 | `CONFLUENCE_BASE_URL` | `--publish` only | e.g. `https://your-org.atlassian.net/wiki` |
 | `CONFLUENCE_TOKEN` | `--publish` only | Confluence personal access token |
 | `CONFLUENCE_PARENT_PAGE_ID` | `--publish` only | Numeric page ID of the parent page |
+| `CONFLUENCE_SPACE_KEY` | `--publish` only | Confluence space key the page lives in |
 
 ---
 
@@ -78,7 +79,7 @@ story-points-analyzer --verbose
 story-points-analyzer --publish
 
 # Publish and upsert a named Confluence page (replaces it if it already exists)
-story-points-analyzer --publish --title "BuddyBuilders Sprint 42"
+story-points-analyzer --publish --title "Team Sprint 42"
 
 # Show all options
 story-points-analyzer --help
@@ -155,8 +156,8 @@ zero. No outliers are flagged for that bucket (there is nothing to distinguish).
 ## Publishing to Confluence
 
 When you run with `--publish`, the tool creates (or upserts) a page under the
-parent you configure via `CONFLUENCE_PARENT_PAGE_ID`. The Space key is inferred
-from that parent page automatically.
+parent you configure via `CONFLUENCE_PARENT_PAGE_ID`, in the space given by
+`CONFLUENCE_SPACE_KEY`.
 
 Title behaviour:
 - **`--publish`** with no `--title` → creates a new page with an auto-generated

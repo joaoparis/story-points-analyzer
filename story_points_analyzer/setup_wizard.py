@@ -22,6 +22,7 @@ _VARS: list[tuple[str, str, bool]] = [
     ("CONFLUENCE_BASE_URL", "Confluence base URL  e.g. https://your-org.atlassian.net/wiki  (only needed for --publish)", False),
     ("CONFLUENCE_TOKEN", "Confluence personal access token  (only needed for --publish)", False),
     ("CONFLUENCE_PARENT_PAGE_ID", "Confluence parent page ID — numeric  (only needed for --publish)", False),
+    ("CONFLUENCE_SPACE_KEY", "Confluence space key  e.g. MYSPACE  (only needed for --publish)", False),
 ]
 
 

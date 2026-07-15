@@ -47,6 +47,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  story-points-analyzer                              write report.md (default)\n"
             "  story-points-analyzer --months 3                   last 3 months\n"
+            "  story-points-analyzer --last-sprint                only the most recent sprint\n"
+            '  story-points-analyzer --sprint "Sprint 42"          a specific named sprint\n'
             "  story-points-analyzer --output q2.md               custom output file\n"
             "  story-points-analyzer --months 3 --verbose         verbose progress output\n"
             "  story-points-analyzer --publish                    publish to Confluence\n"
@@ -58,7 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 1.2.0",
+        version="%(prog)s 1.3.0",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -72,7 +74,20 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=6,
         metavar="N",
-        help="Number of months of history to analyse (default: 6)",
+        help="Number of months of history to analyse (default: 6). Ignored with --sprint/--last-sprint.",
+    )
+    window_group = parser.add_mutually_exclusive_group()
+    window_group.add_argument(
+        "--sprint",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help='Analyse a single named sprint instead of a time window, e.g. --sprint "Sprint 2626 | Bicep Curl".',
+    )
+    window_group.add_argument(
+        "--last-sprint",
+        action="store_true",
+        help="Analyse only the most recently completed sprint.",
     )
     parser.add_argument(
         "--publish",
@@ -127,8 +142,18 @@ def main() -> None:
 
     import time
     t0 = time.time()
-    print(f"Fetching issues from the last {args.months} months…")
-    issues = jira_module.fetch_issues(months=args.months, verbose=args.verbose)
+    if args.sprint:
+        print(f"Fetching issues for sprint '{args.sprint}'…")
+    elif args.last_sprint:
+        print("Fetching issues for the most recent completed sprint…")
+    else:
+        print(f"Fetching issues completed in the last {args.months} months…")
+    issues = jira_module.fetch_issues(
+        months=args.months,
+        sprint=args.sprint,
+        last_sprint=args.last_sprint,
+        verbose=args.verbose,
+    )
     elapsed = time.time() - t0
     print(f"Fetched {len(issues)} issues in {elapsed:.0f}s.")
 
@@ -136,11 +161,12 @@ def main() -> None:
         print("No issues found. Nothing to report.")
         return
 
+    window_label = args.sprint or ("last sprint" if args.last_sprint else f"last {args.months} months")
     if args.publish:
-        report_module.publish_to_confluence(issues, months=args.months, title=args.title)
+        report_module.publish_to_confluence(issues, window_label=window_label, title=args.title)
     else:
         output = Path(args.output)
-        report_module.save_markdown(issues, months=args.months, output_path=str(output))
+        report_module.save_markdown(issues, window_label=window_label, output_path=str(output))
         print(f"Report written to {output.resolve()}")
 
 
